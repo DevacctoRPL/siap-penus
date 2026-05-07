@@ -179,7 +179,7 @@ async function startServer() {
   console.log("✅ MySQL database initialized");
 
   const app = express();
-  const PORT = 3000;
+  const PORT = 3025;
 
   app.use(express.json({ limit: '10mb' }));
 
