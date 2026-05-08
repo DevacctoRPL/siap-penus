@@ -29,7 +29,8 @@ import {
   ExternalLink,
   Send,
   Search,
-  Download
+  Download,
+  Info
 } from "lucide-react";
 import SignatureCanvas from "react-signature-canvas";
 import { jsPDF } from "jspdf";
@@ -57,7 +58,7 @@ interface WaliKelas {
 
 interface UserData {
   id: number;
-  nis: string;
+  nomor_induk: string;
   name: string;
   role: Role;
   class_name: string;
@@ -162,6 +163,36 @@ export default function App() {
   const restoredUser = restoreSession();
   const [user, setUser] = useState<UserData | null>(restoredUser);
 
+  const renderToasts = () => (
+    <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+      <AnimatePresence>
+        {toasts.map((toast) => {
+          const Icon = toast.type === "success" ? CheckCircle2 : toast.type === "error" ? AlertCircle : toast.type === "warning" ? AlertCircle : Info;
+          const color = toast.type === "success" ? "#10B981" : toast.type === "error" ? "#EF4444" : toast.type === "warning" ? "#F59E0B" : "#3B82F6";
+          return (
+            <motion.div
+              key={toast.id}
+              initial={{ opacity: 0, x: 50, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="rounded-xl shadow-2xl p-4 flex items-center gap-3 w-80 pointer-events-auto"
+              style={{ background: '#FFFFFF', border: '1px solid #D5D5D5' }}
+            >
+              <Icon className="w-6 h-6 shrink-0" style={{ color }} />
+              <p className="text-sm font-medium leading-tight flex-1" style={{ color: '#1F2937' }}>{toast.message}</p>
+              <button
+                onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+                className="ml-auto shrink-0 p-1 rounded-md transition-colors hover:bg-gray-100"
+              >
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
+    </div>
+  );
+
   // Detect initial login page from URL
   const getInitialView = (): "login_student" | "login_teacher" | "dashboard" | "form" | "sign" | "logs" => {
     if (restoredUser) return "dashboard";
@@ -180,7 +211,7 @@ export default function App() {
   const [selectedPermit, setSelectedPermit] = useState<Permit | null>(null);
 
   // Login State
-  const [nis, setNis] = useState("");
+  const [nomor_induk, setNomorInduk] = useState("");
   const [password, setPassword] = useState("");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>("");
@@ -203,8 +234,7 @@ export default function App() {
   // Public sign page state (for /sign/:slug route)
   const [publicSignSlug, setPublicSignSlug] = useState<string | null>(null);
   const [publicPermit, setPublicPermit] = useState<Permit | null>(null);
-  const [waliList, setWaliList] = useState<WaliKelas[]>([]);
-  const [selectedWaliName, setSelectedWaliName] = useState("");
+  const [nig, setNig] = useState("");
   const [publicSignDone, setPublicSignDone] = useState(false);
   const [publicSignError, setPublicSignError] = useState("");
 
@@ -236,7 +266,6 @@ export default function App() {
         else setPublicSignError(data.message || "Surat izin tidak ditemukan");
       })
       .catch(() => setPublicSignError("Gagal memuat data"));
-    fetch("/api/wali-kelas").then(r => r.json()).then(setWaliList).catch(() => {});
   }, [publicSignSlug]);
 
   // Fetch teachers for login dropdown
@@ -308,13 +337,13 @@ export default function App() {
 
   const handleLoginStudent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nis.trim()) { showToast("NIS tidak boleh kosong", "warning"); return; }
+    if (!nomor_induk.trim()) { showToast("Nomor Induk tidak boleh kosong", "warning"); return; }
     if (!password.trim()) { showToast("Password tidak boleh kosong", "warning"); return; }
     try {
       const res = await fetch("/api/login/student", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nis, password }),
+        body: JSON.stringify({ nomor_induk, password }),
       });
       const data = await res.json();
       if (data.success && data.token) {
@@ -323,7 +352,7 @@ export default function App() {
         setView("dashboard");
         showToast(`Selamat datang, ${data.user.name}!`, "success");
       } else {
-        showToast("NIS atau Password salah", "error");
+        showToast("Nomor Induk atau Password salah", "error");
       }
     } catch (err) {
       showToast("Terjadi kesalahan koneksi ke server", "error");
@@ -427,26 +456,37 @@ export default function App() {
 
   // Handle wali kelas signing from public page
   const handlePublicSign = async () => {
-    if (!publicSignSlug || !sigCanvas.current || !selectedWaliName) return;
+    if (!publicSignSlug || !sigCanvas.current) return;
+    
+    if (!nig.trim()) {
+      showToast("NIG Wali Kelas tidak boleh kosong!", "warning");
+      return;
+    }
+    
     if (sigCanvas.current.isEmpty()) {
       showToast("Tanda tangan tidak boleh kosong!", "warning");
       return;
     }
+    
+    setLoading(true);
     const signature = sigCanvas.current.getCanvas().toDataURL("image/png");
     try {
       const res = await fetch(`/api/sign/${publicSignSlug}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wali_name: selectedWaliName, signature_wali: signature }),
+        body: JSON.stringify({ nig: nig.trim(), signature_wali: signature }),
       });
       const data = await res.json();
       if (data.success) {
         setPublicSignDone(true);
+        showToast("Berhasil ditandatangani!", "success");
       } else {
         showToast(data.message || "Gagal menandatangani", "error");
       }
     } catch (err) {
       showToast("Terjadi kesalahan koneksi", "error");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -674,24 +714,20 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  {/* Wali Kelas Dropdown */}
+                  {/* Wali Kelas Input */}
                   <div className="space-y-2">
-                    <label className="text-xs font-semibold ml-1" style={{ color: '#393939' }}>Pilih Nama Wali Kelas</label>
+                    <label className="text-xs font-semibold ml-1" style={{ color: '#393939' }}>Nomor Induk Guru (NIG)</label>
                     <div className="relative">
                       <Shield className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 z-10" style={{ color: '#393939' }} />
-                      <select
-                        value={selectedWaliName}
-                        onChange={(e) => setSelectedWaliName(e.target.value)}
-                        className="w-full pl-12 pr-10 py-3.5 border rounded-xl outline-none transition-all text-sm font-medium shadow-sm appearance-none cursor-pointer"
+                      <input
+                        type="text"
+                        value={nig}
+                        onChange={(e) => setNig(e.target.value)}
+                        className="w-full pl-12 pr-4 py-3.5 border rounded-xl outline-none transition-all text-sm font-medium shadow-sm"
                         style={{ background: '#FFFFFF', borderColor: '#D5D5D5', color: '#1F2937' }}
+                        placeholder="Masukkan NIG Wali Kelas"
                         required
-                      >
-                        <option value="">— Pilih Wali Kelas —</option>
-                        {waliList.map((w) => (
-                          <option key={w.id} value={w.name}>{w.name} ({w.class_name})</option>
-                        ))}
-                      </select>
-                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none" style={{ color: '#393939' }} />
+                      />
                     </div>
                   </div>
 
@@ -717,11 +753,11 @@ export default function App() {
 
                   <button
                     onClick={handlePublicSign}
-                    disabled={!selectedWaliName}
+                    disabled={!nig || loading}
                     className="w-full font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.98] text-sm hover:brightness-110 disabled:opacity-40"
                     style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 8px 24px rgba(109,20,8,0.25)' }}
                   >
-                    Setujui & Tanda Tangan
+                    {loading ? "Memproses..." : "Setujui & Tanda Tangan"}
                   </button>
                 </>
               )}
@@ -737,6 +773,7 @@ export default function App() {
             © 2026 Devacto IT RPL • SMK PNB
           </p>
         </motion.div>
+        {renderToasts()}
       </div>
     );
   }
@@ -777,17 +814,17 @@ export default function App() {
           >
             <div className="space-y-2">
               <label className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#393939' }}>
-                NIS (Nomor Induk Siswa)
+                Nomor Induk Siswa
               </label>
               <div className="relative">
                 <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5" style={{ color: '#393939' }} />
                 <input
                   type="text"
-                  value={nis}
-                  onChange={(e) => setNis(e.target.value)}
+                  value={nomor_induk}
+                  onChange={(e) => setNomorInduk(e.target.value)}
                   className="w-full pl-12 pr-4 py-3.5 border rounded-xl focus:ring-4 outline-none transition-all text-sm font-medium shadow-sm"
                   style={{ background: '#FFFFFF', borderColor: '#D5D5D5', color: '#1F2937' }}
-                  placeholder="Masukkan NIS"
+                  placeholder="Masukkan Nomor Induk"
                   required
                 />
               </div>
@@ -824,6 +861,7 @@ export default function App() {
             © 2026 Devacto IT RPL • SMK PNB
           </p>
         </motion.div>
+        {renderToasts()}
       </div>
     );
   }
@@ -915,6 +953,7 @@ export default function App() {
             © 2026 Devacto IT RPL • SMK PNB
           </p>
         </motion.div>
+        {renderToasts()}
       </div>
     );
   }
@@ -1956,6 +1995,9 @@ export default function App() {
           <span>© 2026 Devacto IT RPL • SMK Plus Pelita Nusantara</span>
         </div>
       </footer>
+
+      {/* Global Toast Notifications */}
+      {renderToasts()}
     </div>
   );
 }

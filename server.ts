@@ -23,7 +23,7 @@ let pool: mysql.Pool;
 
 // Extend Express Request to include user from JWT
 interface AuthRequest extends Request {
-  user?: { id: number; nis: string; name: string; role: string; class_name: string };
+  user?: { id: number; nomor_induk: string; name: string; role: string; class_name: string };
 }
 
 // =====================
@@ -44,7 +44,7 @@ function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
   }
 }
 
-function signToken(user: { id: number; nis: string; name: string; role: string; class_name: string }): string {
+function signToken(user: { id: number; nomor_induk: string; name: string; role: string; class_name: string }): string {
   return jwt.sign(user, JWT_SECRET, { expiresIn: "8h" });
 }
 
@@ -76,7 +76,7 @@ async function initDB() {
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS users (
       id INT AUTO_INCREMENT PRIMARY KEY,
-      nis VARCHAR(255) UNIQUE,
+      nomor_induk VARCHAR(255) UNIQUE,
       password TEXT,
       name VARCHAR(255),
       role VARCHAR(50),
@@ -130,30 +130,48 @@ async function initDB() {
     }
   }
 
+  // Check if nomor_induk column exists (for existing databases)
+  try {
+    await pool.execute(`SELECT nomor_induk FROM users LIMIT 1`);
+  } catch {
+    try {
+      await pool.execute(`ALTER TABLE users CHANGE nis nomor_induk VARCHAR(255)`);
+    } catch {
+      // Column might already exist or table doesn't have nis either
+    }
+  }
+
+  // Update existing wali_kelas users to admin
+  try {
+    await pool.execute(`UPDATE users SET role = 'admin' WHERE role = 'wali_kelas'`);
+  } catch {
+    // Ignore errors if table doesn't exist yet
+  }
+
   // Seed initial users if empty
   const [rows] = await pool.execute("SELECT COUNT(*) as count FROM users") as any;
   if (rows[0].count === 0) {
     const seedUsers = [
       // Guru Piket
-      { nis: "GP001", password: "guru123", name: "Ahmad Fauzi, S.Pd.", role: "admin", class_name: "Guru Piket" },
-      { nis: "GP002", password: "guru123", name: "Siti Rahayu, S.Kom.", role: "admin", class_name: "Guru Piket" },
-      { nis: "GP003", password: "guru123", name: "Dedi Kurniawan, M.Pd.", role: "admin", class_name: "Guru Piket" },
+      { nomor_induk: "GP001", password: "guru123", name: "Ahmad Fauzi, S.Pd.", role: "admin", class_name: "Guru Piket" },
+      { nomor_induk: "GP002", password: "guru123", name: "Siti Rahayu, S.Kom.", role: "admin", class_name: "Guru Piket" },
+      { nomor_induk: "GP003", password: "guru123", name: "Dedi Kurniawan, M.Pd.", role: "admin", class_name: "Guru Piket" },
       // Wali Kelas
-      { nis: "WK001", password: "wali123", name: "Yanti Kusuma, S.Pd.", role: "wali_kelas", class_name: "Wali Kelas X RPL 1" },
-      { nis: "WK002", password: "wali123", name: "Hendra Wijaya, S.Kom.", role: "wali_kelas", class_name: "Wali Kelas X RPL 2" },
-      { nis: "WK003", password: "wali123", name: "Ratna Sari, M.Pd.", role: "wali_kelas", class_name: "Wali Kelas XI TKJ 1" },
+      { nomor_induk: "WK001", password: "wali123", name: "Yanti Kusuma, S.Pd.", role: "admin", class_name: "Wali Kelas X RPL 1" },
+      { nomor_induk: "WK002", password: "wali123", name: "Hendra Wijaya, S.Kom.", role: "admin", class_name: "Wali Kelas X RPL 2" },
+      { nomor_induk: "WK003", password: "wali123", name: "Ratna Sari, M.Pd.", role: "admin", class_name: "Wali Kelas XI TKJ 1" },
       // Murid
-      { nis: "12345", password: "murid123", name: "Reihan Aditya Putra", role: "student", class_name: "X RPL 2" },
-      { nis: "12346", password: "murid123", name: "Budi Santoso", role: "student", class_name: "X RPL 1" },
-      { nis: "12347", password: "murid123", name: "Sari Dewi Lestari", role: "student", class_name: "X RPL 2" },
-      { nis: "12348", password: "murid123", name: "Andi Prasetyo", role: "student", class_name: "XI TKJ 1" },
+      { nomor_induk: "12345", password: "murid123", name: "Reihan Aditya Putra", role: "student", class_name: "X RPL 2" },
+      { nomor_induk: "12346", password: "murid123", name: "Budi Santoso", role: "student", class_name: "X RPL 1" },
+      { nomor_induk: "12347", password: "murid123", name: "Sari Dewi Lestari", role: "student", class_name: "X RPL 2" },
+      { nomor_induk: "12348", password: "murid123", name: "Andi Prasetyo", role: "student", class_name: "XI TKJ 1" },
     ];
 
     for (const u of seedUsers) {
       const hashedPassword = bcrypt.hashSync(u.password, BCRYPT_ROUNDS);
       await pool.execute(
-        "INSERT INTO users (nis, password, name, role, class_name) VALUES (?, ?, ?, ?, ?)",
-        [u.nis, hashedPassword, u.name, u.role, u.class_name]
+        "INSERT INTO users (nomor_induk, password, name, role, class_name) VALUES (?, ?, ?, ?, ?)",
+        [u.nomor_induk, hashedPassword, u.name, u.role, u.class_name]
       );
     }
     console.log("✅ Seed users berhasil ditambahkan");
@@ -206,19 +224,19 @@ async function startServer() {
   });
 
   app.post("/api/login/student", async (req, res) => {
-    const { nis, password } = req.body;
+    const { nomor_induk, password } = req.body;
     try {
       const [rows] = await pool.execute(
-        "SELECT * FROM users WHERE nis = ? AND role = 'student'",
-        [nis]
+        "SELECT * FROM users WHERE nomor_induk = ? AND role = 'student'",
+        [nomor_induk]
       ) as any;
       if (rows.length > 0 && bcrypt.compareSync(password, rows[0].password)) {
         const user = rows[0];
-        const safeUser = { id: user.id, nis: user.nis, name: user.name, role: user.role, class_name: user.class_name };
+        const safeUser = { id: user.id, nomor_induk: user.nomor_induk, name: user.name, role: user.role, class_name: user.class_name };
         const token = signToken(safeUser);
         res.json({ success: true, user: safeUser, token });
       } else {
-        res.status(401).json({ success: false, message: "NIS atau password salah" });
+        res.status(401).json({ success: false, message: "Nomor Induk atau password salah" });
       }
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
@@ -234,7 +252,7 @@ async function startServer() {
       ) as any;
       if (rows.length > 0 && bcrypt.compareSync(password, rows[0].password)) {
         const user = rows[0];
-        const safeUser = { id: user.id, nis: user.nis, name: user.name, role: user.role, class_name: user.class_name };
+        const safeUser = { id: user.id, nomor_induk: user.nomor_induk, name: user.name, role: user.role, class_name: user.class_name };
         const token = signToken(safeUser);
         res.json({ success: true, user: safeUser, token });
       } else {
@@ -261,7 +279,7 @@ async function startServer() {
 
   app.post("/api/sign/:slug", async (req, res) => {
     const { slug } = req.params;
-    const { wali_name, signature_wali } = req.body;
+    const { nig, signature_wali } = req.body;
 
     try {
       const [rows] = await pool.execute("SELECT * FROM permits WHERE sign_slug = ?", [slug]) as any;
@@ -272,9 +290,17 @@ async function startServer() {
       if (permit.status !== "pending_wali") {
         return res.status(400).json({ success: false, message: "Surat ini sudah ditandatangani oleh wali kelas" });
       }
-      if (!signature_wali || !wali_name) {
-        return res.status(400).json({ success: false, message: "Tanda tangan dan nama wali kelas diperlukan" });
+      if (!signature_wali || !nig) {
+        return res.status(400).json({ success: false, message: "Tanda tangan dan NIG diperlukan" });
       }
+
+      // Cari nama wali kelas berdasarkan NIG
+      const cleanNig = nig.trim();
+      const [userRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'admin'", [cleanNig]) as any;
+      if (userRows.length === 0) {
+        return res.status(400).json({ success: false, message: "NIG tidak ditemukan atau bukan guru" });
+      }
+      const wali_name = userRows[0].name;
 
       await pool.execute(
         "UPDATE permits SET status = 'wali_approved', wali_name = ?, signature_wali = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_slug = ?",
@@ -293,10 +319,10 @@ async function startServer() {
     try {
       if (!req.file) return res.status(400).json({ success: false, message: "Upload file Excel (.xlsx)." });
       const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const rows = XLSX.utils.sheet_to_json<{ nis: string; password: string; name: string; role: string; class_name: string }>(workbook.Sheets[workbook.SheetNames[0]]);
+      const rows = XLSX.utils.sheet_to_json<{ nomor_induk: string; password: string; name: string; role: string; class_name: string }>(workbook.Sheets[workbook.SheetNames[0]]);
       if (!rows.length) return res.status(400).json({ success: false, message: "File Excel kosong." });
 
-      const requiredCols = ["nis", "password", "name", "role", "class_name"];
+      const requiredCols = ["nomor_induk", "password", "name", "role", "class_name"];
       const missingCols = requiredCols.filter(col => !(col in rows[0]));
       if (missingCols.length > 0) return res.status(400).json({ success: false, message: `Kolom tidak ditemukan: ${missingCols.join(", ")}` });
 
@@ -304,14 +330,14 @@ async function startServer() {
       const errors: string[] = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        if (!row.nis || !row.password || !row.name || !row.role) { skipped++; errors.push(`Baris ${i+2}: data tidak lengkap`); continue; }
-        if (!["student", "admin", "wali_kelas"].includes(row.role)) { skipped++; errors.push(`Baris ${i+2}: role tidak valid`); continue; }
+        if (!row.nomor_induk || !row.password || !row.name || !row.role) { skipped++; errors.push(`Baris ${i+2}: data tidak lengkap`); continue; }
+        if (!["student", "admin"].includes(row.role)) { skipped++; errors.push(`Baris ${i+2}: role tidak valid`); continue; }
         try {
           const hashedPassword = bcrypt.hashSync(String(row.password), BCRYPT_ROUNDS);
           await pool.execute(
-            `INSERT INTO users (nis, password, name, role, class_name) VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO users (nomor_induk, password, name, role, class_name) VALUES (?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE password = VALUES(password), name = VALUES(name), role = VALUES(role), class_name = VALUES(class_name)`,
-            [String(row.nis), hashedPassword, String(row.name), String(row.role), String(row.class_name || "")]
+            [String(row.nomor_induk), hashedPassword, String(row.name), String(row.role), String(row.class_name || "")]
           );
           inserted++;
         } catch (err: any) { skipped++; errors.push(`Baris ${i+2}: ${err.message}`); }
@@ -439,7 +465,7 @@ async function startServer() {
 
   app.get("/api/users", authMiddleware, async (_req, res) => {
     try {
-      const [rows] = await pool.execute("SELECT id, nis, name, role, class_name FROM users ORDER BY role, name");
+      const [rows] = await pool.execute("SELECT id, nomor_induk, name, role, class_name FROM users ORDER BY role, name");
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
