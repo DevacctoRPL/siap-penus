@@ -37,6 +37,7 @@ import { jsPDF } from "jspdf";
 import * as XLSX from "xlsx";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import kopSuratImg from "./assets/kop_surat.png";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -511,65 +512,74 @@ export default function App() {
 
   const exportToPDF = (permit: Permit) => {
     const doc = new jsPDF();
+    const img = new Image();
+    img.src = kopSuratImg;
 
-    // Header
-    doc.setFontSize(16);
-    doc.text("SMK PLUS PELITA NUSANTARA", 105, 20, { align: "center" });
-    doc.setFontSize(10);
-    doc.text("Sistem Izin Pelita Nusantara (SIAP)", 105, 26, {
-      align: "center",
-    });
-    doc.line(20, 30, 190, 30);
+    img.onload = () => {
+      // Calculate aspect ratio for A4 width
+      const imgWidth = 190;
+      const imgHeight = (img.height * imgWidth) / img.width;
+      
+      doc.addImage(img, "PNG", 10, 5, imgWidth, imgHeight);
 
-    // Content
-    doc.setFontSize(14);
-    doc.text("SURAT KETERANGAN PERIZINAN", 105, 45, { align: "center" });
+      const startY = imgHeight + 15;
 
-    doc.setFontSize(11);
-    doc.text(`Nama Siswa: ${permit.student_name}`, 20, 60);
-    doc.text(`Kelas: ${permit.class_name}`, 20, 70);
-    doc.text(
-      `Jenis Izin: ${permit.type === "sakit" ? "Sakit" : "Izin Keperluan"}`,
-      20,
-      80,
-    );
-    doc.text(`Alasan: ${permit.reason}`, 20, 90, { maxWidth: 170 });
-    doc.text(`Tanggal: ${permit.permit_date}`, 20, 110);
-    doc.text(`Waktu: ${permit.start_time} - ${permit.end_time}`, 20, 120);
+      // Content
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text("SURAT KETERANGAN PERIZINAN", 105, startY, { align: "center" });
 
-    doc.text(
-      `ID Referensi: SIAP-${permit.id}-${Date.now().toString().slice(-4)}`,
-      20,
-      125,
-    );
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+      doc.text(`Nama Siswa: ${permit.student_name}`, 20, startY + 15);
+      doc.text(`Kelas: ${permit.class_name}`, 20, startY + 25);
+      doc.text(
+        `Jenis Izin: ${permit.type === "sakit" ? "Sakit" : "Izin Keperluan"}`,
+        20,
+        startY + 35,
+      );
+      doc.text(`Alasan: ${permit.reason}`, 20, startY + 45, { maxWidth: 170 });
+      doc.text(`Tanggal: ${permit.permit_date}`, 20, startY + 65);
+      doc.text(`Waktu: ${permit.start_time} - ${permit.end_time}`, 20, startY + 75);
 
-    // Signatures with signer names
-    const piketSignerName = permit.piket_name || "Guru Piket";
-    const waliSignerName = permit.wali_name || "Wali Kelas";
+      doc.text(
+        `ID Referensi: SIAP-${permit.id}-${Date.now().toString().slice(-4)}`,
+        20,
+        startY + 80,
+      );
 
-    doc.text("Menyetujui,", 20, 150);
-    doc.text("Guru Piket,", 20, 155);
-    if (permit.signature_piket) {
-      doc.addImage(permit.signature_piket, "PNG", 20, 160, 40, 20);
-    }
-    doc.text(`(${piketSignerName})`, 20, 185);
+      // Signatures with signer names
+      const piketSignerName = permit.piket_name || "Guru Piket";
+      const waliSignerName = permit.wali_name || "Wali Kelas";
 
-    doc.text("Wali Kelas,", 140, 155);
-    if (permit.signature_wali) {
-      doc.addImage(permit.signature_wali, "PNG", 140, 160, 40, 20);
-    }
-    doc.text(`(${waliSignerName})`, 140, 185);
+      doc.text("Menyetujui,", 20, startY + 105);
+      doc.text("Guru Piket,", 20, startY + 110);
+      if (permit.signature_piket) {
+        doc.addImage(permit.signature_piket, "PNG", 20, startY + 115, 40, 20);
+      }
+      doc.text(`(${piketSignerName})`, 20, startY + 140);
 
-    // Footer
-    doc.setFontSize(8);
-    doc.text(
-      "Dokumen ini dihasilkan secara digital oleh SIAP SMK Plus Pelita Nusantara dan dinyatakan sah sebagai pengganti surat fisik.",
-      105,
-      280,
-      { align: "center" },
-    );
+      doc.text("Wali Kelas,", 140, startY + 105);
+      if (permit.signature_wali) {
+        doc.addImage(permit.signature_wali, "PNG", 140, startY + 115, 40, 20);
+      }
+      doc.text(`(${waliSignerName})`, 140, startY + 140);
 
-    doc.save(`Surat_Izin_${permit.student_name}_${permit.id}.pdf`);
+      // Footer
+      doc.setFontSize(8);
+      doc.text(
+        "Dokumen ini dihasilkan secara digital oleh SIAP SMK Plus Pelita Nusantara dan dinyatakan sah sebagai pengganti surat fisik.",
+        105,
+        280,
+        { align: "center" },
+      );
+
+      doc.save(`Surat_Izin_${permit.student_name}_${permit.id}.pdf`);
+    };
+
+    img.onerror = () => {
+      showToast("Gagal memuat gambar kop surat ke dalam PDF", "error");
+    };
   };
 
   const handleExportToExcel = () => {
