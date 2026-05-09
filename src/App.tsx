@@ -569,7 +569,7 @@ export default function App() {
       doc.text(`Nama Siswa: ${permit.student_name}`, 20, startY + 15);
       doc.text(`Kelas: ${permit.class_name}`, 20, startY + 25);
       doc.text(
-        `Jenis Izin: ${permit.type === "sakit" ? "Sakit" : permit.type === "pkl" ? "Izin PKL" : "Izin Keperluan"}`,
+        `Jenis Izin: ${permit.type === "sakit" ? "Sakit" : permit.type === "pkl" ? "PKL" : "Izin"}`,
         20,
         startY + 35,
       );
@@ -755,7 +755,9 @@ export default function App() {
                   </div>
                   <div>
                     <p className="text-[10px] font-semibold uppercase" style={{ color: '#393939' }}>Kategori</p>
-                    <p className="font-semibold capitalize" style={{ color: '#1F2937' }}>{publicPermit.type === "sakit" ? "Sakit" : "Izin"}</p>
+                    <p className="font-semibold capitalize" style={{ color: '#1F2937' }}>
+                      {publicPermit.type === "sakit" ? "Sakit" : publicPermit.type === "pkl" ? "PKL" : "Izin"}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] font-semibold uppercase" style={{ color: '#393939' }}>Waktu</p>
@@ -1349,8 +1351,10 @@ export default function App() {
                               {user.role === "admin"
                                 ? permit.student_name
                                 : permit.type === "sakit"
-                                  ? "Surat Sakit"
-                                  : "Surat Izin"}
+                                  ? "Sakit"
+                                  : permit.type === "pkl"
+                                    ? "PKL"
+                                    : "Izin"}
                             </p>
                             <p className="text-xs font-medium mt-1" style={{ color: '#393939' }}>
                               {permit.class_name} • {permit.permit_date} ({permit.start_time} - {permit.end_time})
@@ -1786,9 +1790,9 @@ export default function App() {
                       className="w-full text-sm font-medium rounded-xl p-3.5 outline-none transition-all appearance-none cursor-pointer shadow-sm"
                       style={{ background: '#FFFFFF', border: '1px solid #D5D5D5', color: '#1F2937' }}
                     >
-                      <option value="izin">Perihal Keluarga (Izin)</option>
-                      <option value="sakit">Surat Keterangan (Sakit)</option>
-                      <option value="pkl">Kegiatan PKL (PKL)</option>
+                      <option value="izin">Izin</option>
+                      <option value="sakit">Sakit</option>
+                      <option value="pkl">PKL</option>
                     </select>
                   </div>
 
@@ -1957,7 +1961,7 @@ export default function App() {
                           Kategori
                         </p>
                         <p className="font-medium mt-0.5 capitalize" style={{ color: '#1F2937' }}>
-                          {selectedPermit.type === "sakit" ? "Sakit" : "Izin"}
+                          {selectedPermit.type === "sakit" ? "Sakit" : selectedPermit.type === "pkl" ? "PKL" : "Izin"}
                         </p>
                       </div>
                       <div>
