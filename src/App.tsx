@@ -70,17 +70,21 @@ interface Permit {
   student_id: number;
   student_name: string;
   class_name: string;
-  type: "izin" | "sakit";
+  type: "izin" | "sakit" | "pkl";
   reason: string;
   start_time: string;
   end_time: string;
   permit_date: string;
-  status: "pending_wali" | "wali_approved" | "fully_approved";
+  status: "pending_wali" | "wali_approved" | "pending_ph" | "fully_approved";
   sign_slug?: string;
+  sign_ph_slug?: string;
   wali_name?: string;
   piket_name?: string;
+  ph_name?: string;
   signature_piket?: string;
   signature_wali?: string;
+  signature_siswa?: string;
+  signature_ph?: string;
   proof_file?: string;
   created_at: string;
 }
@@ -219,6 +223,7 @@ export default function App() {
 
   // Sign URL modal state
   const [generatedSlug, setGeneratedSlug] = useState<string | null>(null);
+  const [phSlug, setPhSlug] = useState<string | null>(null);
 
   // Pagination State
   const [permitCurrentPage, setPermitCurrentPage] = useState(1);
@@ -232,7 +237,6 @@ export default function App() {
   const [exportStartDate, setExportStartDate] = useState("");
   const [exportEndDate, setExportEndDate] = useState("");
 
-  // Public sign page state (for /sign/:slug route)
   const [publicSignSlug, setPublicSignSlug] = useState<string | null>(null);
   const [publicPermit, setPublicPermit] = useState<Permit | null>(null);
   const [nig, setNig] = useState("");
@@ -389,7 +393,13 @@ export default function App() {
 
   const handleSubmitPermit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !sigCanvas.current) return;
+    if (sigCanvas.current.isEmpty()) {
+      showToast("Tanda tangan tidak boleh kosong!", "warning");
+      return;
+    }
+    const studentSig = sigCanvas.current.getCanvas().toDataURL("image/png");
+
     if (formData.start_time > formData.end_time) {
       showToast("Jam mulai tidak boleh lebih besar dari jam selesai!", "warning");
       return;
@@ -409,6 +419,7 @@ export default function App() {
           end_time: formData.end_time,
           permit_date: today,
           proof_file: formData.proof_file,
+          signature_siswa: studentSig,
           actor_name: user.name,
         }),
       });
@@ -438,7 +449,7 @@ export default function App() {
     const signature = sigCanvas.current.getCanvas().toDataURL("image/png");
 
     try {
-      await fetch(`/api/permits/${selectedPermit.id}`, {
+      const res = await fetch(`/api/permits/${selectedPermit.id}`, {
         method: "PATCH",
         headers: authHeaders(),
         body: JSON.stringify({
@@ -446,6 +457,10 @@ export default function App() {
           actor_name: user?.name,
         }),
       });
+      const data = await res.json();
+      if (data.sign_ph_slug) {
+        setPhSlug(data.sign_ph_slug);
+      }
       fetchData();
       setView("dashboard");
       setSelectedPermit(null);
@@ -455,27 +470,47 @@ export default function App() {
     }
   };
 
-  // Handle wali kelas signing from public page
+  // =====================================================================
+  // FIX: Tentukan isPH berdasarkan STATUS permit, BUKAN perbandingan slug.
+  //
+  // BUG LAMA:
+  //   const isPH = publicPermit?.sign_ph_slug === publicSignSlug;
+  //   → Jika API /api/sign/:slug tidak mengembalikan field sign_ph_slug,
+  //     maka isPH selalu false → status check salah → form TTD tidak muncul.
+  //
+  // FIX BARU:
+  //   const isPH = publicPermit?.status === "pending_ph";
+  //   → Tidak bergantung pada slug comparison, cukup cek status permit.
+  //   → Wali Kelas selalu TTD saat status "pending_wali" (isPH = false).
+  //   → PH selalu TTD saat status "pending_ph" (isPH = true).
+  // =====================================================================
+  const isPH = publicPermit?.status === "pending_ph";
+
+  // Handle wali kelas / PH signing from public page
   const handlePublicSign = async () => {
-    if (!publicSignSlug || !sigCanvas.current) return;
-    
     if (!nig.trim()) {
-      showToast("NIG Wali Kelas tidak boleh kosong!", "warning");
+      showToast(isPH ? "NIG PH tidak boleh kosong!" : "NIG Wali Kelas tidak boleh kosong!", "warning");
       return;
     }
-    
-    if (sigCanvas.current.isEmpty()) {
+
+    // FIX: Tambahkan null check untuk sigCanvas.current sebelum .isEmpty()
+    if (!sigCanvas.current || sigCanvas.current.isEmpty()) {
       showToast("Tanda tangan tidak boleh kosong!", "warning");
       return;
     }
-    
+
     setLoading(true);
     const signature = sigCanvas.current.getCanvas().toDataURL("image/png");
     try {
+      // FIX: Payload sesuai isPH yang sudah diperbaiki
+      const payload = isPH
+        ? { ph_nig: nig.trim(), signature_ph: signature }
+        : { nig: nig.trim(), signature_wali: signature };
+
       const res = await fetch(`/api/sign/${publicSignSlug}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nig: nig.trim(), signature_wali: signature }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) {
@@ -519,7 +554,7 @@ export default function App() {
       // Calculate aspect ratio for A4 width
       const imgWidth = 190;
       const imgHeight = (img.height * imgWidth) / img.width;
-      
+
       doc.addImage(img, "PNG", 10, 5, imgWidth, imgHeight);
 
       const startY = imgHeight + 15;
@@ -534,36 +569,50 @@ export default function App() {
       doc.text(`Nama Siswa: ${permit.student_name}`, 20, startY + 15);
       doc.text(`Kelas: ${permit.class_name}`, 20, startY + 25);
       doc.text(
-        `Jenis Izin: ${permit.type === "sakit" ? "Sakit" : "Izin Keperluan"}`,
+        `Jenis Izin: ${permit.type === "sakit" ? "Sakit" : permit.type === "pkl" ? "Izin PKL" : "Izin Keperluan"}`,
         20,
         startY + 35,
       );
       doc.text(`Alasan: ${permit.reason}`, 20, startY + 45, { maxWidth: 170 });
       doc.text(`Tanggal: ${permit.permit_date}`, 20, startY + 65);
       doc.text(`Waktu: ${permit.start_time} - ${permit.end_time}`, 20, startY + 75);
+      doc.text(`ID Referensi: SIAP-${permit.id}-${Date.now().toString().slice(-4)}`, 20, startY + 85);
 
-      doc.text(
-        `ID Referensi: SIAP-${permit.id}-${Date.now().toString().slice(-4)}`,
-        20,
-        startY + 80,
-      );
+      // Signatures Layout
+      const piketName = permit.piket_name || "Guru Piket";
+      const waliName = permit.wali_name || "Wali Kelas";
+      const phNameText = permit.ph_name || "PH";
 
-      // Signatures with signer names
-      const piketSignerName = permit.piket_name || "Guru Piket";
-      const waliSignerName = permit.wali_name || "Wali Kelas";
-
+      // Top Left: Guru Piket
       doc.text("Menyetujui,", 20, startY + 105);
       doc.text("Guru Piket,", 20, startY + 110);
       if (permit.signature_piket) {
         doc.addImage(permit.signature_piket, "PNG", 20, startY + 115, 40, 20);
       }
-      doc.text(`(${piketSignerName})`, 20, startY + 140);
+      doc.text(`(${piketName})`, 20, startY + 145);
 
-      doc.text("Wali Kelas,", 140, startY + 105);
-      if (permit.signature_wali) {
-        doc.addImage(permit.signature_wali, "PNG", 140, startY + 115, 40, 20);
+      // Top Right: Siswa
+      doc.text("Pemohon,", 140, startY + 105);
+      doc.text("Siswa,", 140, startY + 110);
+      if (permit.signature_siswa) {
+        doc.addImage(permit.signature_siswa, "PNG", 140, startY + 115, 40, 20);
       }
-      doc.text(`(${waliSignerName})`, 140, startY + 140);
+      doc.text(`(${permit.student_name})`, 140, startY + 145);
+
+      // Bottom Left: PH
+      doc.text("Mengetahui,", 20, startY + 165);
+      doc.text("PH,", 20, startY + 170);
+      if (permit.signature_ph) {
+        doc.addImage(permit.signature_ph, "PNG", 20, startY + 175, 40, 20);
+      }
+      doc.text(`(${phNameText})`, 20, startY + 205);
+
+      // Bottom Right: Wali Kelas
+      doc.text("Wali Kelas,", 140, startY + 165);
+      if (permit.signature_wali) {
+        doc.addImage(permit.signature_wali, "PNG", 140, startY + 175, 40, 20);
+      }
+      doc.text(`(${waliName})`, 140, startY + 205);
 
       // Footer
       doc.setFontSize(8);
@@ -590,7 +639,7 @@ export default function App() {
 
     const start = new Date(exportStartDate);
     const end = new Date(exportEndDate);
-    
+
     const toExport = permits.filter(p => {
       const pDate = new Date(p.permit_date);
       return p.status === "fully_approved" && pDate >= start && pDate <= end;
@@ -617,7 +666,7 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Laporan_Perizinan");
     XLSX.writeFile(wb, `Laporan_Perizinan_${exportStartDate}_sd_${exportEndDate}.xlsx`);
-    
+
     setShowExportModal(false);
     showToast("Berhasil mengekspor data", "success");
   };
@@ -647,7 +696,7 @@ export default function App() {
   const totalLogPages = Math.ceil(logs.length / LOGS_PER_PAGE);
 
   // =====================
-  // PUBLIC SIGN PAGE (Wali Kelas via link)
+  // PUBLIC SIGN PAGE (Wali Kelas / PH via link)
   // =====================
   if (publicSignSlug) {
     return (
@@ -665,8 +714,9 @@ export default function App() {
             <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-xl" style={{ background: '#6D1408', boxShadow: '0 10px 30px rgba(109,20,8,0.3)' }}>
               <Signature className="w-8 h-8" style={{ color: '#F9F6F2' }} />
             </div>
+            {/* FIX: Gunakan isPH (berbasis status) bukan perbandingan slug */}
             <h1 className="text-xl font-bold tracking-tight" style={{ color: '#1F2937' }}>
-              Tanda Tangan Wali Kelas
+              Tanda Tangan {isPH ? "Penanggung Jawab Harian (PH)" : "Wali Kelas"}
             </h1>
             <p className="text-[11px] uppercase tracking-[0.2em] font-semibold mt-2" style={{ color: '#393939' }}>
               SIAP • SMK Plus Pelita Nusantara
@@ -684,8 +734,9 @@ export default function App() {
                 <Check className="w-8 h-8" style={{ color: '#6D1408' }} />
               </div>
               <h3 className="text-lg font-bold" style={{ color: '#1F2937' }}>Berhasil Ditandatangani!</h3>
+              {/* FIX: Pesan sukses sesuai isPH yang sudah diperbaiki */}
               <p className="text-sm" style={{ color: '#393939' }}>
-                Surat izin telah disetujui oleh Wali Kelas. Siswa dapat melanjutkan proses ke Guru Piket.
+                Surat izin telah disetujui. {isPH ? "Proses perizinan selesai." : "Siswa dapat melanjutkan proses ke Guru Piket."}
               </p>
             </div>
           ) : publicPermit ? (
@@ -717,16 +768,32 @@ export default function App() {
                 </div>
               </div>
 
-              {publicPermit.status !== "pending_wali" ? (
+              {/* =================================================================
+                  FIX UTAMA: Kondisi pengecekan status sebelum menampilkan form TTD.
+                  
+                  BUG LAMA:
+                    publicPermit.status !== (publicPermit.sign_ph_slug === publicSignSlug
+                      ? "pending_ph" : "pending_wali")
+                  → Jika sign_ph_slug null dari API, selalu cek "pending_wali"
+                  → Status "pending_ph" !== "pending_wali" → true → tampil "Sudah TTD" ❌
+                  
+                  FIX BARU:
+                    publicPermit.status !== (isPH ? "pending_ph" : "pending_wali")
+                  → isPH sudah benar (berbasis status), sehingga kondisi ini akurat ✓
+                  ================================================================= */}
+              {publicPermit.status !== (isPH ? "pending_ph" : "pending_wali") ? (
                 <div className="rounded-xl p-4 text-center" style={{ background: 'rgba(109,20,8,0.08)', border: '1px solid rgba(109,20,8,0.2)' }}>
                   <Check className="w-6 h-6 mx-auto mb-2" style={{ color: '#6D1408' }} />
-                  <p className="text-sm font-bold" style={{ color: '#6D1408' }}>Surat ini sudah ditandatangani oleh Wali Kelas</p>
+                  <p className="text-sm font-bold" style={{ color: '#6D1408' }}>Surat ini sudah ditandatangani</p>
                 </div>
               ) : (
                 <>
-                  {/* Wali Kelas Input */}
+                  {/* Signer Input */}
                   <div className="space-y-2">
-                    <label className="text-xs font-semibold ml-1" style={{ color: '#393939' }}>Nomor Induk Guru (NIG)</label>
+                    {/* FIX: Label menggunakan isPH yang sudah diperbaiki */}
+                    <label className="text-xs font-semibold ml-1" style={{ color: '#393939' }}>
+                      {isPH ? "NIG Penanggung Jawab Harian (PH)" : "Nomor Induk Guru (NIG) Wali Kelas"}
+                    </label>
                     <div className="relative">
                       <Shield className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 z-10" style={{ color: '#393939' }} />
                       <input
@@ -735,7 +802,7 @@ export default function App() {
                         onChange={(e) => setNig(e.target.value)}
                         className="w-full pl-12 pr-4 py-3.5 border rounded-xl outline-none transition-all text-sm font-medium shadow-sm"
                         style={{ background: '#FFFFFF', borderColor: '#D5D5D5', color: '#1F2937' }}
-                        placeholder="Masukkan NIG Wali Kelas"
+                        placeholder={isPH ? "Masukkan NIG PH" : "Masukkan NIG Wali Kelas"}
                         required
                       />
                     </div>
@@ -1316,6 +1383,16 @@ export default function App() {
                               >
                                 Tanda Tangan Piket
                               </button>
+                            ) : permit.status === "pending_ph" ? (
+                              <button
+                                onClick={() => {
+                                  setPhSlug(permit.sign_ph_slug || null);
+                                }}
+                                className="px-4 py-2 rounded-xl text-xs font-semibold shadow-md transition-all active:scale-[0.98] hover:brightness-110 flex items-center gap-2"
+                                style={{ background: '#F9F6F2', color: '#6D1408', border: '1px solid #6D1408' }}
+                              >
+                                <Link className="w-3 h-3" /> Lihat Link PH
+                              </button>
                             ) : (
                               <div className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5" style={{ background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }}>
                                 <Check className="w-3.5 h-3.5" />
@@ -1324,6 +1401,16 @@ export default function App() {
                             )
                           ) : (
                             <div className="flex items-center gap-2">
+                              {user.role === "student" && permit.status === "pending_wali" && (
+                                <button
+                                  onClick={() => setGeneratedSlug(permit.sign_slug || null)}
+                                  className="p-2 rounded-lg transition-all active:scale-[0.98]"
+                                  style={{ background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }}
+                                  title="Lihat Link Wali Kelas"
+                                >
+                                  <Link className="w-4 h-4" />
+                                </button>
+                              )}
                               {user.role === "student" &&
                                 permit.status === "fully_approved" && (
                                   <button
@@ -1351,7 +1438,9 @@ export default function App() {
                                   ? "Menunggu Wali"
                                   : permit.status === "wali_approved"
                                     ? "Menunggu Piket"
-                                    : "Disetujui"}
+                                    : permit.status === "pending_ph"
+                                      ? "Menunggu PH"
+                                      : "Disetujui"}
                               </span>
                             </div>
                           )}
@@ -1511,49 +1600,49 @@ export default function App() {
                               </span>
                             </td>
                             <td className="px-6 py-4">
-                                <button
-                                  onClick={() => handleExportFromLog(log.permit_id)}
-                                  className="p-2 rounded-lg transition-all active:scale-[0.98]"
-                                  style={{ background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }}
-                                  title="Unduh PDF"
-                                >
-                                  <FileText className="w-4 h-4" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="p-4 flex items-center justify-between" style={{ borderTop: '1px solid #D5D5D5' }}>
-                    <div className="flex items-center gap-2">
-                      <button
-                        disabled={logCurrentPage === 1}
-                        onClick={() => setLogCurrentPage(p => p - 1)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors"
-                        style={{ background: '#FFFFFF', border: '1px solid #D5D5D5', color: '#1F2937' }}
-                      >
-                        Sebelumnya
-                      </button>
-                      <span className="text-xs font-medium" style={{ color: '#393939' }}>
-                        Hal {logCurrentPage} dari {Math.max(1, totalLogPages)}
-                      </span>
-                      <button
-                        disabled={logCurrentPage === totalLogPages || totalLogPages === 0}
-                        onClick={() => setLogCurrentPage(p => p + 1)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors"
-                        style={{ background: '#FFFFFF', border: '1px solid #D5D5D5', color: '#1F2937' }}
-                      >
-                        Selanjutnya
-                      </button>
-                    </div>
-                    <p className="text-xs font-medium" style={{ color: '#393939' }}>
-                      Menampilkan total {logs.length} entri riwayat
-                    </p>
-                  </div>
+                              <button
+                                onClick={() => handleExportFromLog(log.permit_id)}
+                                className="p-2 rounded-lg transition-all active:scale-[0.98]"
+                                style={{ background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }}
+                                title="Unduh PDF"
+                              >
+                                <FileText className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              </motion.div>
+                <div className="p-4 flex items-center justify-between" style={{ borderTop: '1px solid #D5D5D5' }}>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={logCurrentPage === 1}
+                      onClick={() => setLogCurrentPage(p => p - 1)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors"
+                      style={{ background: '#FFFFFF', border: '1px solid #D5D5D5', color: '#1F2937' }}
+                    >
+                      Sebelumnya
+                    </button>
+                    <span className="text-xs font-medium" style={{ color: '#393939' }}>
+                      Hal {logCurrentPage} dari {Math.max(1, totalLogPages)}
+                    </span>
+                    <button
+                      disabled={logCurrentPage === totalLogPages || totalLogPages === 0}
+                      onClick={() => setLogCurrentPage(p => p + 1)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors"
+                      style={{ background: '#FFFFFF', border: '1px solid #D5D5D5', color: '#1F2937' }}
+                    >
+                      Selanjutnya
+                    </button>
+                  </div>
+                  <p className="text-xs font-medium" style={{ color: '#393939' }}>
+                    Menampilkan total {logs.length} entri riwayat
+                  </p>
+                </div>
+              </div>
+            </motion.div>
           )}
 
           {/* Export Excel Modal */}
@@ -1580,7 +1669,7 @@ export default function App() {
                       <X className="w-4 h-4" style={{ color: '#393939' }} />
                     </button>
                   </div>
-                  
+
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <label className="text-xs font-semibold ml-1" style={{ color: '#393939' }}>Tanggal Mulai</label>
@@ -1603,7 +1692,7 @@ export default function App() {
                       />
                     </div>
                   </div>
-                  
+
                   <p className="text-[10px] text-center leading-relaxed" style={{ color: '#393939' }}>
                     Hanya data yang <strong>sudah disetujui penuh</strong> (Wali Kelas & Guru Piket) yang akan diekspor.
                   </p>
@@ -1699,6 +1788,7 @@ export default function App() {
                     >
                       <option value="izin">Perihal Keluarga (Izin)</option>
                       <option value="sakit">Surat Keterangan (Sakit)</option>
+                      <option value="pkl">Kegiatan PKL (PKL)</option>
                     </select>
                   </div>
 
@@ -1778,78 +1868,34 @@ export default function App() {
                     ></textarea>
                   </div>
 
+                  {/* Student Signature */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-semibold ml-1" style={{ color: '#393939' }}>Tanda Tangan Siswa</label>
+                      <button
+                        type="button"
+                        onClick={() => sigCanvas.current?.clear()}
+                        className="text-xs font-semibold" style={{ color: '#6D1408' }}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <div className="rounded-2xl h-40 overflow-hidden" style={{ background: '#FFFFFF', border: '1px solid #D5D5D5' }}>
+                      <SignatureCanvas
+                        ref={sigCanvas}
+                        penColor="black"
+                        canvasProps={{ className: "w-full h-full cursor-crosshair" }}
+                      />
+                    </div>
+                  </div>
+
                   <button className="w-full font-bold py-4 rounded-xl text-sm shadow-lg transition-all active:scale-[0.98] mt-4 flex items-center justify-center gap-2 hover:brightness-110" style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 8px 24px rgba(109,20,8,0.25)' }}>
                     <Send className="w-4 h-4" />
-                    Minta TTD Wali Kelas
+                    Kirim & Ajukan ke Wali Kelas
                   </button>
                 </form>
-
-                {/* Generated URL Modal */}
-                <AnimatePresence>
-                  {generatedSlug && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-                      onClick={() => { setGeneratedSlug(null); setView("dashboard"); }}
-                    >
-                      <motion.div
-                        initial={{ scale: 0.9, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.9, opacity: 0 }}
-                        className="rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-5"
-                        style={{ background: '#FFFFFF', border: '1px solid #D5D5D5' }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="text-center">
-                          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(109,20,8,0.1)' }}>
-                            <Link className="w-8 h-8" style={{ color: '#6D1408' }} />
-                          </div>
-                          <h3 className="text-lg font-bold" style={{ color: '#1F2937' }}>Link TTD Berhasil Dibuat!</h3>
-                          <p className="text-xs mt-2 leading-relaxed" style={{ color: '#393939' }}>
-                            Kirim link di bawah ini ke Wali Kelas via WhatsApp untuk mendapatkan tanda tangan.
-                          </p>
-                        </div>
-
-                        <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: '#F9F6F2', border: '1px solid #D5D5D5' }}>
-                          <p className="text-xs font-mono flex-1 break-all" style={{ color: '#393939' }}>
-                            {window.location.origin}/sign/{generatedSlug}
-                          </p>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(`${window.location.origin}/sign/${generatedSlug}`);
-                              showToast("Link berhasil disalin ke clipboard!", "success");
-                            }}
-                            className="p-2 rounded-lg transition-colors shrink-0" style={{ background: '#FFFFFF', border: '1px solid #D5D5D5', color: '#393939' }}
-                            title="Salin Link"
-                          >
-                            <Copy className="w-4 h-4" />
-                          </button>
-                        </div>
-
-                        <a
-                          href={`https://wa.me/?text=${encodeURIComponent(`Assalamualaikum, saya mohon izin dan meminta tanda tangan Wali Kelas.\n\nSilakan buka link berikut:\n${window.location.origin}/sign/${generatedSlug}\n\nTerima kasih.`)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="w-full font-bold py-3.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-lg hover:brightness-110"
-                          style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 8px 20px rgba(109,20,8,0.25)' }}
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                          Bagikan via WhatsApp
-                        </a>
-
-                        <button
-                          onClick={() => { setGeneratedSlug(null); setView("dashboard"); }}
-                          className="w-full font-semibold py-2 text-sm transition-colors" style={{ color: '#393939' }}
-                        >
-                          Tutup & Kembali ke Dashboard
-                        </button>
-                      </motion.div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
               </div>
+
             </motion.div>
           )}
 
@@ -1992,12 +2038,127 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Global Modals (Generated Links) */}
+        <AnimatePresence>
+          {generatedSlug && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9998] flex items-center justify-center p-4"
+              onClick={() => { setGeneratedSlug(null); setView("dashboard"); }}
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6"
+                style={{ background: '#FFFFFF', border: '1px solid #D5D5D5' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="text-center space-y-2">
+                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(109,20,8,0.1)', color: '#6D1408' }}>
+                    <Link className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-xl font-bold" style={{ color: '#1F2937' }}>Link Tanda Tangan Wali Kelas</h3>
+                  <p className="text-sm" style={{ color: '#393939' }}>Kirim link ini ke Wali Kelas Anda untuk mendapatkan tanda tangan.</p>
+                </div>
+
+                <div className="p-4 rounded-xl flex items-center justify-between gap-3" style={{ background: '#F9F6F2', border: '1px solid #D5D5D5' }}>
+                  <p className="text-xs font-mono truncate flex-1" style={{ color: '#1F2937' }}>
+                    {window.location.origin}/sign/{generatedSlug}
+                  </p>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/sign/${generatedSlug}`);
+                      showToast("Link berhasil disalin!", "success");
+                    }}
+                    className="p-2 rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    <Copy className="w-4 h-4" style={{ color: '#6D1408' }} />
+                  </button>
+                </div>
+
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(`Assalamualaikum, saya mohon izin dan meminta tanda tangan Wali Kelas.\n\nSilakan buka link berikut:\n${window.location.origin}/sign/${generatedSlug}\n\nTerima kasih.`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full font-bold py-3.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-lg hover:brightness-110"
+                  style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 8px 20px rgba(109,20,8,0.25)' }}
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Bagikan via WhatsApp
+                </a>
+
+                <button
+                  onClick={() => { setGeneratedSlug(null); setView("dashboard"); }}
+                  className="w-full font-semibold py-2 text-sm transition-colors" style={{ color: '#393939' }}
+                >
+                  Tutup & Kembali ke Dashboard
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {phSlug && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9998] flex items-center justify-center p-4"
+              onClick={() => setPhSlug(null)}
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6"
+                style={{ background: '#FFFFFF', border: '1px solid #D5D5D5' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="text-center space-y-2">
+                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(109,20,8,0.1)', color: '#6D1408' }}>
+                    <Link className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-xl font-bold" style={{ color: '#1F2937' }}>Link Tanda Tangan PH</h3>
+                  <p className="text-sm" style={{ color: '#393939' }}>Berikan link ini ke Penanggung Jawab Harian (PH) untuk tanda tangan terakhir.</p>
+                </div>
+
+                <div className="p-4 rounded-xl flex items-center justify-between gap-3" style={{ background: '#F9F6F2', border: '1px solid #D5D5D5' }}>
+                  <p className="text-xs font-mono truncate flex-1" style={{ color: '#1F2937' }}>
+                    {window.location.origin}/sign/{phSlug}
+                  </p>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/sign/${phSlug}`);
+                      showToast("Link berhasil disalin!", "success");
+                    }}
+                    className="p-2 rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    <Copy className="w-4 h-4" style={{ color: '#6D1408' }} />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setPhSlug(null)}
+                  className="w-full font-bold py-3.5 rounded-xl text-sm transition-all active:scale-[0.98]"
+                  style={{ background: '#6D1408', color: '#F9F6F2' }}
+                >
+                  Tutup
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* Footer */}
       <footer className="px-8 py-5 flex flex-col sm:flex-row justify-between items-center gap-4 mt-auto" style={{ background: '#FFFFFF', borderTop: '1px solid #D5D5D5' }}>
         <div className="flex items-center gap-3 text-xs font-medium" style={{ color: '#393939' }}>
-          <span>Versi 3.0.0</span>
+          <span>Versi 3.0.1</span>
           <span className="w-1 h-1 rounded-full" style={{ background: '#D5D5D5' }}></span>
           <span style={{ color: '#6D1408' }}>Sistem Keamanan Aktif</span>
         </div>

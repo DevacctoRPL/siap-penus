@@ -101,6 +101,10 @@ async function initDB() {
       piket_name VARCHAR(255),
       signature_piket LONGTEXT,
       signature_wali LONGTEXT,
+      signature_siswa LONGTEXT,
+      sign_ph_slug VARCHAR(255) UNIQUE,
+      ph_name VARCHAR(255),
+      signature_ph LONGTEXT,
       proof_file LONGTEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -127,6 +131,20 @@ async function initDB() {
       await pool.execute(`ALTER TABLE permits ADD COLUMN piket_name VARCHAR(255) AFTER wali_name`);
     } catch {
       // Column might already exist
+    }
+  }
+
+  // Check if signature_siswa column exists (for existing databases)
+  try {
+    await pool.execute(`SELECT signature_siswa FROM permits LIMIT 1`);
+  } catch {
+    try {
+      await pool.execute(`ALTER TABLE permits ADD COLUMN signature_siswa LONGTEXT AFTER signature_wali`);
+      await pool.execute(`ALTER TABLE permits ADD COLUMN sign_ph_slug VARCHAR(255) UNIQUE AFTER signature_siswa`);
+      await pool.execute(`ALTER TABLE permits ADD COLUMN ph_name VARCHAR(255) AFTER sign_ph_slug`);
+      await pool.execute(`ALTER TABLE permits ADD COLUMN signature_ph LONGTEXT AFTER ph_name`);
+    } catch {
+      // Columns might already exist
     }
   }
 
@@ -267,7 +285,7 @@ async function startServer() {
   app.get("/api/sign/:slug", async (req, res) => {
     const { slug } = req.params;
     try {
-      const [rows] = await pool.execute("SELECT * FROM permits WHERE sign_slug = ?", [slug]) as any;
+      const [rows] = await pool.execute("SELECT * FROM permits WHERE sign_slug = ? OR sign_ph_slug = ?", [slug, slug]) as any;
       if (rows.length === 0) {
         return res.status(404).json({ success: false, message: "Surat izin tidak ditemukan" });
       }
@@ -279,36 +297,59 @@ async function startServer() {
 
   app.post("/api/sign/:slug", async (req, res) => {
     const { slug } = req.params;
-    const { nig, signature_wali } = req.body;
+    const { nig, signature_wali, signature_ph, ph_nig } = req.body;
 
     try {
-      const [rows] = await pool.execute("SELECT * FROM permits WHERE sign_slug = ?", [slug]) as any;
+      const [rows] = await pool.execute("SELECT * FROM permits WHERE sign_slug = ? OR sign_ph_slug = ?", [slug, slug]) as any;
       if (rows.length === 0) {
         return res.status(404).json({ success: false, message: "Surat izin tidak ditemukan" });
       }
       const permit = rows[0];
-      if (permit.status !== "pending_wali") {
-        return res.status(400).json({ success: false, message: "Surat ini sudah ditandatangani oleh wali kelas" });
-      }
-      if (!signature_wali || !nig) {
-        return res.status(400).json({ success: false, message: "Tanda tangan dan NIG diperlukan" });
-      }
 
-      // Cari nama wali kelas berdasarkan NIG
-      const cleanNig = nig.trim();
-      const [userRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'admin'", [cleanNig]) as any;
-      if (userRows.length === 0) {
-        return res.status(400).json({ success: false, message: "NIG tidak ditemukan atau bukan guru" });
+      if (permit.sign_slug === slug) {
+        // Wali Kelas flow
+        if (permit.status !== "pending_wali") {
+          return res.status(400).json({ success: false, message: "Surat ini sudah ditandatangani oleh wali kelas" });
+        }
+        if (!signature_wali || !nig) {
+          return res.status(400).json({ success: false, message: "Tanda tangan dan NIG diperlukan" });
+        }
+        const cleanNig = nig.trim();
+        const [userRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'admin'", [cleanNig]) as any;
+        if (userRows.length === 0) {
+          return res.status(400).json({ success: false, message: "NIG tidak ditemukan atau bukan guru" });
+        }
+        const wali_name = userRows[0].name;
+
+        await pool.execute(
+          "UPDATE permits SET status = 'wali_approved', wali_name = ?, signature_wali = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_slug = ?",
+          [wali_name, signature_wali, slug]
+        );
+        await recordLog(permit.id, wali_name, "Menyetujui (Wali Kelas Approved)");
+        return res.json({ success: true });
+      } else {
+        // PH flow
+        if (permit.status !== "pending_ph") {
+          return res.status(400).json({ success: false, message: "Surat ini sudah ditandatangani oleh PH" });
+        }
+        if (!signature_ph || !ph_nig) {
+          return res.status(400).json({ success: false, message: "Tanda tangan dan NIG PH diperlukan" });
+        }
+
+        const cleanPhNig = ph_nig.trim();
+        const [phRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'admin'", [cleanPhNig]) as any;
+        if (phRows.length === 0) {
+          return res.status(400).json({ success: false, message: "NIG PH tidak ditemukan atau bukan guru/staf" });
+        }
+        const ph_name = phRows[0].name;
+
+        await pool.execute(
+          "UPDATE permits SET status = 'fully_approved', ph_name = ?, signature_ph = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_ph_slug = ?",
+          [ph_name, signature_ph, slug]
+        );
+        await recordLog(permit.id, ph_name, "Mengetahui (PH Approved)");
+        return res.json({ success: true });
       }
-      const wali_name = userRows[0].name;
-
-      await pool.execute(
-        "UPDATE permits SET status = 'wali_approved', wali_name = ?, signature_wali = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_slug = ?",
-        [wali_name, signature_wali, slug]
-      );
-      await recordLog(permit.id, wali_name, "Menyetujui (Wali Kelas Approved)");
-
-      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }
@@ -361,7 +402,7 @@ async function startServer() {
         res.json(rows);
       } else {
         const [rows] = await pool.execute(
-          "SELECT * FROM permits WHERE status IN ('wali_approved', 'fully_approved') ORDER BY created_at DESC"
+          "SELECT * FROM permits WHERE status IN ('wali_approved', 'pending_ph', 'fully_approved') ORDER BY created_at DESC"
         );
         res.json(rows);
       }
@@ -371,7 +412,7 @@ async function startServer() {
   });
 
   app.post("/api/permits", authMiddleware, async (req: AuthRequest, res) => {
-    const { student_id, student_name, class_name, type, reason, start_time, end_time, permit_date, proof_file, actor_name } = req.body;
+    const { student_id, student_name, class_name, type, reason, start_time, end_time, permit_date, proof_file, actor_name, signature_siswa } = req.body;
     
     if (start_time > end_time) {
       return res.status(400).json({ success: false, message: "Jam mulai tidak boleh lebih besar dari jam selesai" });
@@ -380,9 +421,9 @@ async function startServer() {
     const slug = generateSlug();
     try {
       const [result] = await pool.execute(
-        `INSERT INTO permits (student_id, student_name, class_name, type, reason, start_time, end_time, permit_date, proof_file, sign_slug, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_wali')`,
-        [student_id, student_name, class_name, type, reason, start_time, end_time, permit_date, proof_file || null, slug]
+        `INSERT INTO permits (student_id, student_name, class_name, type, reason, start_time, end_time, permit_date, proof_file, sign_slug, signature_siswa, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_wali')`,
+        [student_id, student_name, class_name, type, reason, start_time, end_time, permit_date, proof_file || null, slug, signature_siswa || null]
       ) as any;
 
       await recordLog(result.insertId, actor_name || student_name, `Mengajukan surat ${type}`);
@@ -400,13 +441,16 @@ async function startServer() {
 
     try {
       if (signature_piket) {
+        const phSlug = generateSlug();
         await pool.execute(
-          "UPDATE permits SET status = 'fully_approved', signature_piket = ?, piket_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-          [signature_piket, actor_name || "Guru Piket", permitId]
+          "UPDATE permits SET status = 'pending_ph', signature_piket = ?, piket_name = ?, sign_ph_slug = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          [signature_piket, actor_name || "Guru Piket", phSlug, permitId]
         );
         await recordLog(permitId, actor_name || "Guru Piket", "Menyetujui (Guru Piket Approved)");
+        res.json({ success: true, sign_ph_slug: phSlug });
+      } else {
+        res.json({ success: true });
       }
-      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }
