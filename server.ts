@@ -297,7 +297,7 @@ async function startServer() {
 
   app.post("/api/sign/:slug", async (req, res) => {
     const { slug } = req.params;
-    const { nig, signature_wali, signature_ph, ph_nig } = req.body;
+    const { nig, signature_wali, signature_ph, ph_nig, action } = req.body;
 
     try {
       const [rows] = await pool.execute("SELECT * FROM permits WHERE sign_slug = ? OR sign_ph_slug = ?", [slug, slug]) as any;
@@ -309,10 +309,10 @@ async function startServer() {
       if (permit.sign_slug === slug) {
         // Wali Kelas flow
         if (permit.status !== "pending_wali") {
-          return res.status(400).json({ success: false, message: "Surat ini sudah ditandatangani oleh wali kelas" });
+          return res.status(400).json({ success: false, message: "Surat ini sudah diproses" });
         }
-        if (!signature_wali || !nig) {
-          return res.status(400).json({ success: false, message: "Tanda tangan dan NIG diperlukan" });
+        if (!nig) {
+          return res.status(400).json({ success: false, message: "NIG diperlukan" });
         }
         const cleanNig = nig.trim();
         const [userRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'admin'", [cleanNig]) as any;
@@ -321,6 +321,20 @@ async function startServer() {
         }
         const wali_name = userRows[0].name;
 
+        // Reject flow
+        if (action === "reject") {
+          await pool.execute(
+            "UPDATE permits SET status = 'rejected', wali_name = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_slug = ?",
+            [wali_name, slug]
+          );
+          await recordLog(permit.id, wali_name, "Menolak (Wali Kelas Rejected)");
+          return res.json({ success: true });
+        }
+
+        // Approve flow
+        if (!signature_wali) {
+          return res.status(400).json({ success: false, message: "Tanda tangan diperlukan" });
+        }
         await pool.execute(
           "UPDATE permits SET status = 'wali_approved', wali_name = ?, signature_wali = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_slug = ?",
           [wali_name, signature_wali, slug]
@@ -330,10 +344,10 @@ async function startServer() {
       } else {
         // PH flow
         if (permit.status !== "pending_ph") {
-          return res.status(400).json({ success: false, message: "Surat ini sudah ditandatangani oleh PH" });
+          return res.status(400).json({ success: false, message: "Surat ini sudah diproses" });
         }
-        if (!signature_ph || !ph_nig) {
-          return res.status(400).json({ success: false, message: "Tanda tangan dan NIG PH diperlukan" });
+        if (!ph_nig) {
+          return res.status(400).json({ success: false, message: "NIG PH diperlukan" });
         }
 
         const cleanPhNig = ph_nig.trim();
@@ -343,6 +357,20 @@ async function startServer() {
         }
         const ph_name = phRows[0].name;
 
+        // Reject flow
+        if (action === "reject") {
+          await pool.execute(
+            "UPDATE permits SET status = 'rejected', ph_name = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_ph_slug = ?",
+            [ph_name, slug]
+          );
+          await recordLog(permit.id, ph_name, "Menolak (PH Rejected)");
+          return res.json({ success: true });
+        }
+
+        // Approve flow
+        if (!signature_ph) {
+          return res.status(400).json({ success: false, message: "Tanda tangan diperlukan" });
+        }
         await pool.execute(
           "UPDATE permits SET status = 'fully_approved', ph_name = ?, signature_ph = ?, updated_at = CURRENT_TIMESTAMP WHERE sign_ph_slug = ?",
           [ph_name, signature_ph, slug]
@@ -402,7 +430,7 @@ async function startServer() {
         res.json(rows);
       } else {
         const [rows] = await pool.execute(
-          "SELECT * FROM permits WHERE status IN ('wali_approved', 'pending_ph', 'fully_approved') ORDER BY created_at DESC"
+          "SELECT * FROM permits WHERE status IN ('wali_approved', 'pending_ph', 'fully_approved', 'rejected') ORDER BY created_at DESC"
         );
         res.json(rows);
       }
@@ -437,9 +465,27 @@ async function startServer() {
   app.patch("/api/permits/:id", authMiddleware, async (req: AuthRequest, res) => {
     const { id } = req.params;
     const permitId = parseInt(id);
-    const { signature_piket, actor_name } = req.body;
+    const { signature_piket, actor_name, action } = req.body;
 
     try {
+      // Reject flow from Guru Piket
+      if (action === "reject") {
+        const [permitRows] = await pool.execute("SELECT * FROM permits WHERE id = ?", [permitId]) as any;
+        if (permitRows.length === 0) {
+          return res.status(404).json({ success: false, message: "Permit tidak ditemukan" });
+        }
+        if (permitRows[0].status !== "wali_approved") {
+          return res.status(400).json({ success: false, message: "Hanya permit yang sudah disetujui wali kelas yang bisa ditolak" });
+        }
+        await pool.execute(
+          "UPDATE permits SET status = 'rejected', piket_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          [actor_name || "Guru Piket", permitId]
+        );
+        await recordLog(permitId, actor_name || "Guru Piket", "Menolak (Guru Piket Rejected)");
+        return res.json({ success: true });
+      }
+
+      // Approve flow
       if (signature_piket) {
         const phSlug = generateSlug();
         await pool.execute(
@@ -465,6 +511,73 @@ async function startServer() {
       } else {
         res.status(404).json({ success: false, message: "Permit not found" });
       }
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Delete permit (student only, when status is pending_wali or rejected)
+  app.delete("/api/permits/:id", authMiddleware, async (req: AuthRequest, res) => {
+    const { id } = req.params;
+    const permitId = parseInt(id);
+    try {
+      const [rows] = await pool.execute("SELECT * FROM permits WHERE id = ?", [permitId]) as any;
+      if (rows.length === 0) {
+        return res.status(404).json({ success: false, message: "Permit tidak ditemukan" });
+      }
+      const permit = rows[0];
+
+      // Only the student who owns the permit can delete it
+      if (req.user?.role === "student" && permit.student_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: "Anda tidak memiliki akses untuk menghapus pengajuan ini" });
+      }
+
+      // Only allow deletion if status is pending_wali or rejected
+      if (permit.status !== "pending_wali" && permit.status !== "rejected") {
+        return res.status(400).json({ success: false, message: "Pengajuan yang sudah diproses tidak dapat dihapus" });
+      }
+
+      // Delete related logs first (foreign key constraint)
+      await pool.execute("DELETE FROM permit_logs WHERE permit_id = ?", [permitId]);
+      await pool.execute("DELETE FROM permits WHERE id = ?", [permitId]);
+
+      res.json({ success: true, message: "Pengajuan berhasil dihapus" });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Update permit (student only, when status is pending_wali)
+  app.put("/api/permits/:id", authMiddleware, async (req: AuthRequest, res) => {
+    const { id } = req.params;
+    const permitId = parseInt(id);
+    const { type, reason, start_time, end_time, proof_file, signature_siswa } = req.body;
+    try {
+      const [rows] = await pool.execute("SELECT * FROM permits WHERE id = ?", [permitId]) as any;
+      if (rows.length === 0) {
+        return res.status(404).json({ success: false, message: "Permit tidak ditemukan" });
+      }
+      const permit = rows[0];
+
+      if (req.user?.role === "student" && permit.student_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: "Anda tidak memiliki akses untuk mengubah pengajuan ini" });
+      }
+
+      if (permit.status !== "pending_wali") {
+        return res.status(400).json({ success: false, message: "Pengajuan yang sudah diproses tidak dapat diubah" });
+      }
+
+      if (start_time > end_time) {
+        return res.status(400).json({ success: false, message: "Jam mulai tidak boleh lebih besar dari jam selesai" });
+      }
+
+      await pool.execute(
+        `UPDATE permits SET type = ?, reason = ?, start_time = ?, end_time = ?, proof_file = ?, signature_siswa = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [type, reason, start_time, end_time, proof_file || null, signature_siswa || null, permitId]
+      );
+      await recordLog(permitId, req.user?.name || permit.student_name, "Mengubah pengajuan");
+
+      res.json({ success: true, message: "Pengajuan berhasil diubah" });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }

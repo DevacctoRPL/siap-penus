@@ -30,7 +30,9 @@ import {
   Send,
   Search,
   Download,
-  Info
+  Info,
+  Trash2,
+  Ban
 } from "lucide-react";
 import SignatureCanvas from "react-signature-canvas";
 import { jsPDF } from "jspdf";
@@ -75,7 +77,7 @@ interface Permit {
   start_time: string;
   end_time: string;
   permit_date: string;
-  status: "pending_wali" | "wali_approved" | "pending_ph" | "fully_approved";
+  status: "pending_wali" | "wali_approved" | "pending_ph" | "fully_approved" | "rejected";
   sign_slug?: string;
   sign_ph_slug?: string;
   wali_name?: string;
@@ -526,6 +528,84 @@ export default function App() {
     }
   };
 
+  // Handle public reject (Wali Kelas / PH via link)
+  const handlePublicReject = async () => {
+    if (!nig.trim()) {
+      showToast(isPH ? "NIG PH tidak boleh kosong!" : "NIG Wali Kelas tidak boleh kosong!", "warning");
+      return;
+    }
+
+    if (!confirm("Apakah Anda yakin ingin MENOLAK pengajuan ini?")) return;
+
+    setLoading(true);
+    try {
+      const payload = isPH
+        ? { ph_nig: nig.trim(), action: "reject" }
+        : { nig: nig.trim(), action: "reject" };
+
+      const res = await fetch(`/api/sign/${publicSignSlug}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPublicSignDone(true);
+        showToast("Pengajuan berhasil ditolak", "success");
+      } else {
+        showToast(data.message || "Gagal menolak", "error");
+      }
+    } catch (err) {
+      showToast("Terjadi kesalahan koneksi", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle delete permit (student only)
+  const handleDeletePermit = async (permitId: number) => {
+    if (!confirm("Apakah Anda yakin ingin menghapus pengajuan ini?")) return;
+    try {
+      const res = await fetch(`/api/permits/${permitId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Pengajuan berhasil dihapus", "success");
+        fetchData();
+      } else {
+        showToast(data.message || "Gagal menghapus pengajuan", "error");
+      }
+    } catch (err) {
+      showToast("Terjadi kesalahan koneksi", "error");
+    }
+  };
+
+  // Handle reject permit from Guru Piket dashboard
+  const handleRejectPermitPiket = async (permitId: number) => {
+    if (!confirm("Apakah Anda yakin ingin MENOLAK pengajuan ini?")) return;
+    try {
+      const res = await fetch(`/api/permits/${permitId}`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          action: "reject",
+          actor_name: user?.name,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Pengajuan berhasil ditolak", "success");
+        fetchData();
+      } else {
+        showToast(data.message || "Gagal menolak pengajuan", "error");
+      }
+    } catch (err) {
+      showToast("Terjadi kesalahan koneksi", "error");
+    }
+  };
+
   const handleExportFromLog = async (permit_id: number) => {
     const existingPermit = permits.find((p) => p.id === permit_id);
     if (existingPermit) {
@@ -659,10 +739,24 @@ export default function App() {
       "Waktu": `${p.start_time} - ${p.end_time}`,
       "Alasan": p.reason,
       "Wali Kelas": p.wali_name || "-",
-      "Guru Piket": p.piket_name || "-"
+      "Guru Piket": p.piket_name || "-",
+      "Penanggung Jawab Harian": p.ph_name || "-"
     }));
 
-    const ws = XLSX.utils.json_to_sheet(exportData);
+    const ws = XLSX.utils.json_to_sheet(exportData, {
+      header: [
+        "ID",
+        "Tanggal",
+        "Nama Siswa",
+        "Kelas",
+        "Kategori",
+        "Waktu",
+        "Alasan",
+        "Wali Kelas",
+        "Guru Piket",
+        "Penanggung Jawab Harian"
+      ]
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Laporan_Perizinan");
     XLSX.writeFile(wb, `Laporan_Perizinan_${exportStartDate}_sd_${exportEndDate}.xlsx`);
@@ -830,14 +924,25 @@ export default function App() {
                     </div>
                   </div>
 
-                  <button
-                    onClick={handlePublicSign}
-                    disabled={!nig || loading}
-                    className="w-full font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.98] text-sm hover:brightness-110 disabled:opacity-40"
-                    style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 8px 24px rgba(109,20,8,0.25)' }}
-                  >
-                    {loading ? "Memproses..." : "Setujui & Tanda Tangan"}
-                  </button>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handlePublicReject}
+                      disabled={!nig || loading}
+                      className="flex-1 font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.98] text-sm hover:brightness-110 disabled:opacity-40 flex items-center justify-center gap-2"
+                      style={{ background: '#FFFFFF', color: '#EF4444', border: '2px solid #EF4444' }}
+                    >
+                      <Ban className="w-4 h-4" />
+                      {loading ? "..." : "Tolak"}
+                    </button>
+                    <button
+                      onClick={handlePublicSign}
+                      disabled={!nig || loading}
+                      className="flex-[2] font-bold py-4 rounded-xl shadow-lg transition-all active:scale-[0.98] text-sm hover:brightness-110 disabled:opacity-40"
+                      style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 8px 24px rgba(109,20,8,0.25)' }}
+                    >
+                      {loading ? "Memproses..." : "Setujui & Tanda Tangan"}
+                    </button>
+                  </div>
                 </>
               )}
             </div>
@@ -1317,11 +1422,13 @@ export default function App() {
                           "p-5 rounded-2xl border flex items-center justify-between transition-all group duration-200",
                         )}
                         style={
-                          permit.status === "wali_approved"
-                            ? { background: 'rgba(109,20,8,0.04)', border: '1px solid rgba(109,20,8,0.15)' }
-                            : permit.status === "pending_wali"
-                              ? { background: '#F9F6F2', border: '1px solid #D5D5D5' }
-                              : { background: '#FFFFFF', border: '1px solid #D5D5D5' }
+                          permit.status === "rejected"
+                            ? { background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)' }
+                            : permit.status === "wali_approved"
+                              ? { background: 'rgba(109,20,8,0.04)', border: '1px solid rgba(109,20,8,0.15)' }
+                              : permit.status === "pending_wali"
+                                ? { background: '#F9F6F2', border: '1px solid #D5D5D5' }
+                                : { background: '#FFFFFF', border: '1px solid #D5D5D5' }
                         }
                       >
                         <div className="flex items-center gap-4">
@@ -1377,16 +1484,25 @@ export default function App() {
                         <div className="flex items-center gap-3">
                           {user.role === "admin" ? (
                             permit.status === "wali_approved" ? (
-                              <button
-                                onClick={() => {
-                                  setSelectedPermit(permit);
-                                  setView("sign");
-                                }}
-                                className="px-4 py-2 rounded-xl text-xs font-semibold shadow-md transition-all active:scale-[0.98] hover:brightness-110"
-                                style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 4px 16px rgba(109,20,8,0.3)' }}
-                              >
-                                Tanda Tangan Piket
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleRejectPermitPiket(permit.id)}
+                                  className="px-3 py-2 rounded-xl text-xs font-semibold shadow-md transition-all active:scale-[0.98] flex items-center gap-1.5"
+                                  style={{ background: '#FFFFFF', color: '#EF4444', border: '1px solid #EF4444' }}
+                                >
+                                  <Ban className="w-3 h-3" /> Tolak
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedPermit(permit);
+                                    setView("sign");
+                                  }}
+                                  className="px-4 py-2 rounded-xl text-xs font-semibold shadow-md transition-all active:scale-[0.98] hover:brightness-110"
+                                  style={{ background: '#6D1408', color: '#F9F6F2', boxShadow: '0 4px 16px rgba(109,20,8,0.3)' }}
+                                >
+                                  Tanda Tangan Piket
+                                </button>
+                              </div>
                             ) : permit.status === "pending_ph" ? (
                               <button
                                 onClick={() => {
@@ -1397,6 +1513,11 @@ export default function App() {
                               >
                                 <Link className="w-3 h-3" /> Lihat Link PH
                               </button>
+                            ) : permit.status === "rejected" ? (
+                              <div className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5" style={{ background: 'rgba(239,68,68,0.08)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }}>
+                                <Ban className="w-3.5 h-3.5" />
+                                Ditolak
+                              </div>
                             ) : (
                               <div className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5" style={{ background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }}>
                                 <Check className="w-3.5 h-3.5" />
@@ -1415,6 +1536,16 @@ export default function App() {
                                   <Link className="w-4 h-4" />
                                 </button>
                               )}
+                              {user.role === "student" && (permit.status === "pending_wali" || permit.status === "rejected") && (
+                                <button
+                                  onClick={() => handleDeletePermit(permit.id)}
+                                  className="p-2 rounded-lg transition-all active:scale-[0.98]"
+                                  style={{ background: 'rgba(239,68,68,0.08)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }}
+                                  title="Hapus Pengajuan"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
                               {user.role === "student" &&
                                 permit.status === "fully_approved" && (
                                   <button
@@ -1431,20 +1562,24 @@ export default function App() {
                                   "text-xs font-semibold px-2.5 py-1 rounded-lg",
                                 )}
                                 style={
-                                  permit.status === "pending_wali"
-                                    ? { background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }
-                                    : permit.status === "wali_approved"
-                                      ? { background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }
-                                      : { background: 'rgba(109,20,8,0.1)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.2)' }
+                                  permit.status === "rejected"
+                                    ? { background: 'rgba(239,68,68,0.08)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }
+                                    : permit.status === "pending_wali"
+                                      ? { background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }
+                                      : permit.status === "wali_approved"
+                                        ? { background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }
+                                        : { background: 'rgba(109,20,8,0.1)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.2)' }
                                 }
                               >
-                                {permit.status === "pending_wali"
-                                  ? "Menunggu Wali"
-                                  : permit.status === "wali_approved"
-                                    ? "Menunggu Piket"
-                                    : permit.status === "pending_ph"
-                                      ? "Menunggu PH"
-                                      : "Disetujui"}
+                                {permit.status === "rejected"
+                                  ? "Ditolak"
+                                  : permit.status === "pending_wali"
+                                    ? "Menunggu Wali"
+                                    : permit.status === "wali_approved"
+                                      ? "Menunggu Piket"
+                                      : permit.status === "pending_ph"
+                                        ? "Menunggu PH"
+                                        : "Disetujui"}
                               </span>
                             </div>
                           )}
@@ -1576,11 +1711,13 @@ export default function App() {
                                   "text-xs font-semibold px-2.5 py-1 rounded-lg",
                                 )}
                                 style={
-                                  log.action.includes("Mengajukan")
-                                    ? { background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }
-                                    : log.action.includes("Menyetujui")
-                                      ? { background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }
-                                      : { background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }
+                                  log.action.includes("Menolak")
+                                    ? { background: 'rgba(239,68,68,0.08)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }
+                                    : log.action.includes("Mengajukan")
+                                      ? { background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }
+                                      : log.action.includes("Menyetujui") || log.action.includes("Mengetahui")
+                                        ? { background: 'rgba(109,20,8,0.08)', color: '#6D1408', border: '1px solid rgba(109,20,8,0.15)' }
+                                        : { background: '#F9F6F2', color: '#393939', border: '1px solid #D5D5D5' }
                                 }
                               >
                                 {log.action}
