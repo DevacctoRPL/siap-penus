@@ -954,7 +954,7 @@ export default function App() {
           )}
 
           <p className="text-center text-[10px] font-medium tracking-wide py-4" style={{ color: '#393939', borderTop: '1px solid #D5D5D5' }}>
-            © 2026 Devacto IT RPL • SMK PNB
+            © 2026 Devacto IT RPL • SMK Plus PNB
           </p>
         </motion.div>
         {renderToasts()}
@@ -1042,7 +1042,7 @@ export default function App() {
           </motion.form>
 
           <p className="text-center text-[10px] font-medium tracking-wide pb-6 pt-4" style={{ color: '#393939', borderTop: '1px solid #D5D5D5' }}>
-            © 2026 Devacto IT RPL • SMK PNB
+            © 2026 Devacto IT RPL • SMK Plus PNB
           </p>
         </motion.div>
         {renderToasts()}
@@ -1134,7 +1134,7 @@ export default function App() {
           </motion.form>
 
           <p className="text-center text-[10px] font-medium tracking-wide pb-6 pt-4" style={{ color: '#393939', borderTop: '1px solid #D5D5D5' }}>
-            © 2026 Devacto IT RPL • SMK PNB
+            © 2026 Devacto IT RPL • SMK Plus PNB
           </p>
         </motion.div>
         {renderToasts()}

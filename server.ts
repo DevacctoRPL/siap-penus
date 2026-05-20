@@ -351,9 +351,9 @@ async function startServer() {
         }
 
         const cleanPhNig = ph_nig.trim();
-        const [phRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'admin'", [cleanPhNig]) as any;
+        const [phRows] = await pool.execute("SELECT name FROM users WHERE nomor_induk = ? AND role = 'ph'", [cleanPhNig]) as any;
         if (phRows.length === 0) {
-          return res.status(400).json({ success: false, message: "NIG PH tidak ditemukan atau bukan guru/staf" });
+          return res.status(400).json({ success: false, message: "NIG PH tidak ditemukan atau role bukan PH" });
         }
         const ph_name = phRows[0].name;
 
@@ -400,7 +400,7 @@ async function startServer() {
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         if (!row.nomor_induk || !row.password || !row.name || !row.role) { skipped++; errors.push(`Baris ${i+2}: data tidak lengkap`); continue; }
-        if (!["student", "admin"].includes(row.role)) { skipped++; errors.push(`Baris ${i+2}: role tidak valid`); continue; }
+        if (!["student", "admin", "ph"].includes(row.role)) { skipped++; errors.push(`Baris ${i+2}: role tidak valid`); continue; }
         try {
           const hashedPassword = bcrypt.hashSync(String(row.password), BCRYPT_ROUNDS);
           await pool.execute(
